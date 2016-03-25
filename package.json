@@ -1,0 +1,24 @@
+{
+  "name": "igor-cli",
+  "version": "1.0.0",
+  "description": "Great tool to make Franky based sites.",
+  "main": "index.js",
+  "scripts": {
+    "test": "mocha tests"
+  },
+  "keywords": [
+    "cli",
+    "franky"
+  ],
+  "bin": {
+    "igor": "./index.js"
+  },
+  "author": "@ogranada",
+  "license": "MIT",
+  "dependencies": {
+    "chalk": "^1.1.1",
+    "commander": "^2.9.0",
+    "prompt-sync": "^4.0.4",
+    "prompt-sync-history": "^1.0.1"
+  }
+}
