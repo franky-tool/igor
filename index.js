@@ -1,14 +1,18 @@
 #!/usr/bin/env node --harmony
 
 var program = require('commander')
-  , packageData = require('./lib/basePackage.js')
+  , packageData
   , configData = require('./lib/baseConfig.js')
   , utils = require('./lib/utils.js')
   , prompt = require('prompt-sync')({
       history: require('prompt-sync-history')()
     })
+  , async = require('async')
   , chalk = require('chalk')
   , fs = require('fs')
+  , cp = require('child_process')
+  , exec = cp.exec
+  , spawn = cp.spawn
   ;
 
 
@@ -28,8 +32,8 @@ program
   .option('-d, --project-description <project_description>', 'The description for project.')
   .option('-g, --generated-folder <generated_folder>', 'Generated files folder name for project.')
   .option('-i, --interactive', 'Fill lost data interactively.')
-  .option('-p, --preprocessor <preprocessor>', 'The style preprocessor for project.')
   .option('-o, --data-folder <data_folder>', 'Data folder name for project.')
+  .option('-p, --preprocessor <preprocessor>', 'The style preprocessor for project.', /^(sass|less|stylus)$/, 'sass')
   .option('-s, --sources-folder <sources_folder>', 'Sources folder name for project.')
   .option('-t, --templates-folder <templates_folder>', 'Templates folder name for project.')
   .option('-u, --statics-folder <statics_folder>', 'Statics folder name for project.')
@@ -49,10 +53,8 @@ program
       , controllersFolder = getVariableFromParser(program, prompt,'controllersFolder', 'controllers')
       , generatedFolder = getVariableFromParser(program, prompt,'generatedFolder', '_site')
       , dataFolder = getVariableFromParser(program, prompt,'dataFolder', 'data')
+      , VERBOSE = getVariableFromParser(program, prompt,'verbose', false)
       ;
-
-    packageData.name = project_name.toLowerCase();
-    packageData.description = description;
 
     configData.preprocessor = preprocessor.toLowerCase();
     configData.app = appFolder.toLowerCase();
@@ -60,58 +62,129 @@ program
     configData.statics = staticsFolder.toLowerCase();
     configData.templates = templatesFolder.toLowerCase();
     configData.controllers = controllersFolder.toLowerCase();
-    configData.data_folder = dataFolder.toLowerCase();
-    configData.generated = generatedFolder.toLowerCase();
+    configData.database.name = dataFolder.toLowerCase();
+    configData.generation.targetFolder = generatedFolder.toLowerCase();
 
     console.log(chalk.gray("Creating ")+chalk.bold.yellow(project_name));
     var target = process.cwd()+"/"+project_name;
-    makeFolder(target, function createFolder(err) {
-      if(err) {
-          return console.log(err);
-      }
-			makeFolder(target+"/"+configData.app, function createFolder(err) {
-        if(err) {
-            return console.log(err);
+    async.waterfall([
+      function cloneRepo(callback){
+        exec("git clone https://github.com/franky-tool/franky "+target, callback);
+      },
+      function updateSubmodules(error, stdout, stderr, callback){
+        if(!!arguments[3]){
+          console.error(chalk.red('Error creating module:' + error.message));
+          process.exit(-1);
         }
-        makeFolder(target+"/"+configData.app+"/"+configData.sources);
-        makeFolder(target+"/"+configData.app+"/"+configData.sources+"/js");
-        makeFolder(target+"/"+configData.app+"/"+configData.sources+"/styles");
-        makeFolder(target+"/"+configData.app+"/"+configData.templates);
-        makeFolder(target+"/"+configData.app+"/"+configData.statics);
-        makeFolder(target+"/"+configData.app+"/"+configData.controllers);
-				fs.writeFile(target+"/"+configData.app+"/"+configData.templates+"/index.html", htmlFile);
-				fs.writeFile(target+"/"+configData.app+"/"+configData.sources+"/js/sample.js", "// Sample file");
-				fs.writeFile(target+"/"+configData.app+"/"+configData.sources+"/styles/sample.scss", "// Sample file");
-				fs.writeFile(target+"/index.js", indexFile.replace('<$>', configData.app), function (err) {
-          fs.writeFile(target+"/gulpfile.js", gulpFile.replace('<$>', configData.app), function (err) {
-            fs.writeFile(target+"/package.json", JSON.stringify(packageData, null, 2), function (err) {
-              if(err) {
-                  return console.log(err);
-              }
-              makeFolder(target+"/"+configData.app, function(err) {
-                if(err) {
-                    return console.log(err);
-                }
-                var data = "\nvar config = "+JSON.stringify(configData, null, 2)+"\n\nmodule.exports = config;";
-                fs.writeFile(target+"/"+configData.app+"/config.js", data, function(err) {
-                  if(err) {
-                      return console.log(err);
-                  }
-                  prompt.history.save();
-                  console.log("Project is created!");
-                });
-              });
-            });
-          });
-				});
-			});
-
+        exec('cd '+target+'; git submodule update --init; git submodule foreach git pull origin master; rm -Rf .git', arguments[2]);
+      },
+      function moveSources(error, stdout, stderr, callback){
+        VERBOSE&&console.log(""+stdout);
+        var packagePath = [target,'package.json'].join('/');
+        packageData = JSON.parse(fs.readFileSync(packagePath, 'utf8'));
+        packageData.name = project_name.toLowerCase();
+        packageData.description = description;
+        if(!!arguments[3]){
+          console.error(chalk.red('Error updating submodules:' + error.message));
+          console.log(chalk.red(""+stdout));
+          process.exit(-1);
+        }
+        VERBOSE&&console.log(chalk.cyan('Base project is created'));
+        if(sourcesFolder==='src'){
+          return arguments[arguments.length-1]();
+        }
+        exec('mv '+target+'/app/src '+target+'/app/'+sourcesFolder, arguments[2]);
+      },
+      function moveTemplates(error, stdout, stderr, callback){
+        VERBOSE&&console.log(""+stdout);
+        if(!!arguments[3]){
+          console.error('Error updating sources:' + chalk.red(error.message));
+          process.exit(-1);
+        }
+        VERBOSE&&console.log(chalk.cyan('sources created'));
+        if(templatesFolder==='templates'){
+          return arguments[arguments.length-1]();
+        }
+        exec('mv '+target+'/app/templates '+target+'/app/'+templatesFolder, arguments[2]);
+      },
+      function moveControllers(error, stdout, stderr, callback){
+        if(!!arguments[3]){
+          console.error('Error updating templates:' + chalk.red(error.message));
+          process.exit(-1);
+        }
+        VERBOSE&&console.log(chalk.cyan('templates created'));
+        if(controllersFolder==='controllers'){
+          return arguments[arguments.length-1]();
+        }
+        exec('mv '+target+'/app/controllers '+target+'/app/'+controllersFolder, arguments[2]);
+      },
+      function moveAppFolder(error, stdout, stderr, callback){
+        if(!!arguments[3]){
+          console.error('Error updating controllers:' + chalk.red(error.message));
+          process.exit(-1);
+        }
+        VERBOSE&&console.log(chalk.cyan('controllers created'));
+        if(configData.app==='app'){
+          return arguments[arguments.length-1]();
+        }
+        exec('mv '+target+'/app '+target+'/'+configData.app, arguments[2]);
+      },
+      function(error, stdout, stderr, callback){
+        if(!!arguments[3]){
+          console.error(chalk.red(error.message));
+          process.exit(-1);
+        }
+        VERBOSE&&console.log(chalk.cyan('files ready'));
+        var data = "\nvar config = "+JSON.stringify(configData, null, 2)+"\n\nmodule.exports = config;";
+        fs.writeFile(target+"/"+configData.app+"/config.js", data, arguments[2]||arguments[0]);
+      },
+      function (error, callback) {
+        if(!!arguments[1]) {
+            return console.log(error);
+        }
+        VERBOSE&&console.log(chalk.cyan('configuration updated'));
+        fs.writeFile(target+"/package.json", JSON.stringify(packageData, null, 2), arguments[0]);
+      },
+      function (error, callback) {
+        if(!!arguments[1]) {
+            return console.log(error);
+        }
+        VERBOSE&&console.log(chalk.cyan('package updated'));
+        callback = arguments[0];
+        fs.readFile(target + '/gulpfile.js', function (err, data) {
+          data = (''+data).replace(/\/app/g, '/'+configData.app);
+          fs.writeFile(target+"/gulpfile.js", data, callback);
+        });
+      },
+      function (error, callback) {
+        if(!!arguments[1]) {
+            return console.log(error);
+        }
+        VERBOSE&&console.log(chalk.cyan('gulpfile updated'));
+        callback = arguments[0];
+        fs.readFile(target + '/index.js', function (err, data) {
+          data = (''+data).replace(/\'app\'/g, '\''+configData.app+'\'');
+          fs.writeFile(target+"/index.js", data, callback);
+        });
+      },
+      function(callback) {
+        VERBOSE&&console.log(chalk.cyan('configuration created'));
+        prompt.history.save();
+        callback();
+      },
+      function updateGitRepo(callback){
+        exec('cd '+target+'; git init . ; git add . ; git commit --author="Igor <igor@franky-tool.org>" -m "first commit" ', arguments[2]);
+        VERBOSE&&console.log(chalk.cyan('Repository initialized...'));
+        callback();
+      }
+    ], function(){
+      console.log(chalk.green('Done!!!'));
     });
   })
   .parse(process.argv);
 
 if (!GLOBAL.project_name) {
-  console.error("Invalid project name. Use "+chalk.green("'igor -h'")+" to get help.");
+  console.error('Invalid project name. Use '+chalk.green('"igor -h"')+' to get help.');
   process.exit(-1);
 }
 
